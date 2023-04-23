@@ -8,10 +8,13 @@ Adafruit_SSD1306 display = Adafruit_SSD1306(128, 32, &Wire); // OLED library
     0: None
     1: X
     2: O
+    3: Selection
 */
 
 // Variables //
 byte CurrentTurn = 1; // X gets the first turn
+byte SelectedPos = 0;
+bool PosFlashed = false;
 
 // Constants //
 const byte DefaultDelay = 16;
@@ -21,14 +24,15 @@ const byte ButtonCapture = 13;
 const byte ButtonChange = 12;
 
 // Button Old States //
-bool OldButtonCaptureState = false; // OFF (I'll use this later for button held stuff)
+bool OldButtonChangeState = false; // OFF (I'll use this later for button held stuff)
 
-byte Positions[10][3] = {
+byte Board[10][3] = {
   /*
   CaptureValues:
-    0 = No Value (EMPTY SQUARE)
-    1 = X        (Captured By X)
-    2 = O        (Captured By O)
+    0 = No Value  (EMPTY SQUARE)
+    1 = X         (Captured By X)
+    2 = O         (Captured By O)
+    3 = Selection (To show currently selected slot)
   */
 
   //Data: {byte_ Xpos, byte_ Ypos, byte_ CaptureValue}
@@ -55,19 +59,14 @@ void drawBoard() {
 
 void updateBoard() {
   for (int integer = 0; integer <= 9; integer++) { // Updating the board with the current position data
-    const byte x = Positions[integer][0];
-    const byte y = Positions[integer][1];
-    const byte Captured = Positions[integer][2];
+    const byte x = Board[integer][0];
+    const byte y = Board[integer][1];
+    const byte Captured = Board[integer][2];
 
     display.setCursor(x, y);
 
     //Serial.println(String(Captured) + ", iter:" + String(integer)); // Debugging
-    
-    if (Captured == 1) {
-      display.print("X");
-    } else if (Captured == 2) {
-      display.print("Y");
-    } else if (Captured == 0) {
+    if (Captured == 0) {
       display.setTextColor(BLACK); // Setting text color to turn off mode (BLACK)
       display.print("Y"); // Turning off pixels for shape Y
 
@@ -77,20 +76,112 @@ void updateBoard() {
       delayMicroseconds(10);
 
       display.setTextColor(WHITE); // Reverting the text color to its old state (WHITE)
+    }else if (Captured == 1) {
+      display.print("X");
+    } else if (Captured == 2) {
+      display.print("O");
+    } else if (Captured == 3) {
+      display.print("%");
     } else {
       // error for invalid capture number
       display.print("#"); // Error Hash
-      Serial.println("[Error] INVALID CAPTURER, EXPECTED [0, 1, 2] RECIEVED: " + String(Captured));
+      Serial.println("[Error] INVALID CAPTURER, EXPECTED [0, 1, 2, 3] RECIEVED: " + String(Captured));
       delay(10000);
       break;
     }
   }
 }
 
+void EndGame(byte State) {
+  _ClearSelections();
+
+  display.setTextColor(WHITE);
+  display.setCursor(66, 8);
+  display.setTextSize(1);
+
+  if (State == 0) {
+    display.setCursor(66, 13);
+    //Serial.println("GAMESTATE: Draw");
+    display.print("Draw");
+  } else if (State == 1) {
+    //Serial.println("X won");
+    display.print("Winner:");
+    display.setCursor(84, 18);
+    display.print("X");
+  } else if (State == 2) {
+    //Serial.println("O won");
+    display.print("Winner:");
+    display.setCursor(84, 18);
+    display.print("O");
+  }
+  
+  display.display();
+
+  delay(9e6);
+}
+
+void _ClearSlot(byte Pos) {
+  Board[Pos][2] = 0;
+}
+
+void _ClearSelections() {
+  for (byte i = 0; i < 9; i++) {
+    if (Board[i][2] == 3) {
+      display.setTextColor(BLACK);
+      display.setCursor(Board[i][0], Board[i][1]);
+      display.print("%");
+      Board[i][2] = 0;
+
+      display.setTextColor(WHITE);
+    }
+  }
+}
+
+void _SelectPos(byte Pos) {
+  Serial.println(String("Data: ") + Board[Pos][2] + String(", for pos: ") + Pos);
+  _ClearSelections();
+
+  if (Board[Pos][2] != 0) {
+    Serial.println("NOT EMPTY");
+    Serial.println(Board[Pos][2]);
+    for (int i = Pos; i < 9; i++) {
+      if (Board[i][2] == 0) {
+        Serial.println(String("changed to pos" ) + Pos + String(", ") + i);
+        Pos = i;
+        break;
+      }
+    }
+
+    if (Board[Pos][2] != 0) {
+      for (int i = 0; i < 9; i++) {
+        if (Board[i][2] == 0) {
+          Serial.println(String("changed to pos" ) + Pos + String(", ") + i);
+          Pos = i;
+          break;
+        }
+      }
+    }
+
+    if (Board[Pos][2] != 0) {
+      EndGame(0); // no slots left, its a draw.
+    }
+  }
+
+  if (Pos > 8) {
+    Pos = 0;
+  };
+  
+  display.setCursor(Board[Pos][0], Board[Pos][1]);
+  display.print("%");
+  Board[Pos][2] = 3;
+
+  SelectedPos = Pos;
+}
+
 void _ForceMove(byte Pos, byte Captured /* 1 || 2 */) { // Internal Function
-  Positions[Pos][2] = 0; // Clearing the position
+  _ClearSlot(Pos); // Clearing the slot
   updateBoard();
-  Positions[Pos][2] = Captured; 
+  Board[Pos][2] = Captured; 
 }
 
 void setup() {
@@ -117,25 +208,106 @@ void setup() {
   display.display();
 }
 
-void loop() {
-  //Serial.println(digitalRead(ButtonCapture), OldButtonCaptureState);
-  if (digitalRead(ButtonCapture) && !OldButtonCaptureState) {
-    OldButtonCaptureState = true; // Booleans are 1, 0 values
-    _ForceMove(4, 1);
+void CheckGameStatus() {
+  for (byte Check = 1; Check <= 2; Check++) {
+    byte LineLength = 0;
 
-    Serial.println("ButtonCapture pressed.");
-    delay(150);
-  } else if (digitalRead(ButtonCapture)) {  // If the button is eld then this code will run
-    Serial.println("ButtonCapture held.");h
-    _ForceMove(4, 2);
-    delay(500);
-  } else { // if the button is not held and is not pressed then this code will run
-    OldButtonCaptureState = false; // old state is now false
-    _ForceMove(4, 0);
+    for (byte y = 0; y <= 6; y+=3) { // Horizontal && Vertical Check
+
+      for (byte x = y; x <= (y + 2); x++) {
+        String temp = String("y: valy, y: valx, data: valdat"); // DEBUG
+        temp.replace("valy", String(y));
+        temp.replace("valx", String(x));
+        temp.replace("valdat", String(Board[x][2]));
+        if (Board[x][2] == Check) {
+          LineLength++;
+        }
+      }
+
+      //Serial.println(String("Length ") + String(Check) + ": " + LineLength);
+    }
+
+    if (LineLength == 3) {
+      Serial.println(Check + String(" won because horizontal or vertical"));
+      EndGame(Check);
+    }
+    
+    LineLength = 0;
+
+    for (byte pos = 0; pos <= 8; pos += 4) { // diagonal check type: ⟍ (left to right)
+      if (Board[pos][2] == Check) {
+        LineLength++;
+        //Serial.println(Check + String(" diag ltr found at:") + pos);
+      }
+    }
+
+    if (LineLength == 3) {
+      EndGame(Check);
+    }
+
+    LineLength = 0;
+
+    for (byte pos = 2; pos <= 6; pos += 2) { // diagonal check type: ⟋ (right to left)
+      if (Board[pos][2] == Check) {
+        LineLength++;
+        //Serial.println(Check + String(" diag rtl found at:") + pos);
+      }
+    }
+
+    if (LineLength == 3) {
+      EndGame(Check);
+    }
+
+    LineLength = 0;
+
   }
+}
+
+void loop() {
+  CheckGameStatus();
+
+  const bool ButtonChangeState = digitalRead(ButtonChange);
+  const bool ButtonCaptureState = digitalRead(ButtonCapture);
+
+
+  if (ButtonChangeState && !OldButtonChangeState) {
+    _SelectPos(SelectedPos + 1);
+
+    Serial.println(String("Changed Pos") + SelectedPos);
+
+    delay(150);
+  } else if (ButtonChangeState) {  // If the change position button is held then this code will run
+    _SelectPos(SelectedPos + 1);
+
+    Serial.println(String("Held Changed Pos") + SelectedPos);
+
+    delay(300);
+  } else if (ButtonCaptureState) {
+    _ForceMove(SelectedPos, CurrentTurn);
+    
+    if (CurrentTurn == 2) {
+      CurrentTurn = 1;
+    } else {
+      CurrentTurn = 2;
+    }
+
+    for (byte i = 0; i < 9; i++) {
+      if (Board[i][2] == 0) { // finding the first empty slot
+        SelectedPos = i; // set the selected position to the first empty slot
+        break;
+      }
+    }
+
+    do {delay(100);}while (digitalRead(ButtonCapture));
+  } else {
+    // if no button is pressed we display the selected position to the users
+    _SelectPos(SelectedPos);
+  }
+
+  OldButtonChangeState = ButtonChangeState; // Setting the old capture state after we finish with the button control
 
   updateBoard();
   display.display(); // UPDATING THE PIXELS ON THE OLED SCREEN
 
-  delay(33); // 60 Hz refresh rate
+  delay(16); // refresh rate
 }
